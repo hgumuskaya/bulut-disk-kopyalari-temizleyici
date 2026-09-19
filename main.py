@@ -161,7 +161,6 @@ class KopyaTemizleyiciApp:
 
         haric_tut = self.haric_tut_var.get()
         desen = re.compile(r' \(\d+\)$')
-        yol = Path(kok_klasor)
         temizlenen_dosya_sayisi = 0
 
         self.log_yaz(f"Tarama başlatıldı: {kok_klasor}")
@@ -174,50 +173,70 @@ class KopyaTemizleyiciApp:
             
         self.log_yaz("-" * 50)
 
+        # Klasör erişim hatalarını yakalayan callback fonksiyonu
+        def klasor_hata_yakala(error):
+            self.log_yaz(f"[UYARI/ATLANDI] Erişim engellendi: {error.filename}")
+
+        # Windows sistem korumalı dizinleri
+        atlanacak_dizinler = {"$recycle.bin", "system volume information", "recovery"}
+
         try:
-            for dosya in yol.rglob('*'):
+            # os.walk kullanarak hataları yakalayıp taramaya devam ediyoruz
+            for kok, dizinler, dosyalar in os.walk(kok_klasor, onerror=klasor_hata_yakala):
                 if self.iptal_edildi:
                     self.log_yaz("-" * 50)
                     self.log_yaz("KULLANICI İŞLEMİ İPTAL ETTİ!")
                     break
 
-                if dosya.is_file():
-                    dosya_uzantisi = dosya.suffix.lower()
-                    
+                # Sistem korumalı klasörleri tarama dışı bırak
+                dizinler[:] = [d for d in dizinler if d.lower() not in atlanacak_dizinler]
+
+                for dosya_adi_tam in dosyalar:
+                    if self.iptal_edildi:
+                        break
+
+                    dosya_yolu = Path(kok) / dosya_adi_tam
+                    dosya_uzantisi = dosya_yolu.suffix.lower()
+
                     if gecerli_uzantilar:
                         if haric_tut and (dosya_uzantisi in gecerli_uzantilar):
                             continue
                         elif not haric_tut and (dosya_uzantisi not in gecerli_uzantilar):
                             continue
 
-                    dosya_adi = dosya.stem 
-                    eslesme = desen.search(dosya_adi)
-                    
+                    dosya_kok_adi = dosya_yolu.stem
+                    eslesme = desen.search(dosya_kok_adi)
+
                     if eslesme:
-                        orijinal_isim = dosya_adi[:eslesme.start()] + dosya.suffix
-                        orijinal_yol = dosya.parent / orijinal_isim
+                        orijinal_isim = dosya_kok_adi[:eslesme.start()] + dosya_yolu.suffix
+                        orijinal_yol = dosya_yolu.parent / orijinal_isim
 
                         silme_izni = True
 
-                        if self.orijinal_sart.get() and not orijinal_yol.exists():
-                            silme_izni = False
-                            
-                        if silme_izni and self.boyut_sart.get():
-                            if orijinal_yol.exists():
-                                kopya_boyut = os.path.getsize(dosya)
-                                orijinal_boyut = os.path.getsize(orijinal_yol)
-                                if kopya_boyut != orijinal_boyut:
-                                    silme_izni = False
-                            else:
+                        try:
+                            # 1. Kural: Orijinal dosya şartı
+                            if self.orijinal_sart.get() and not orijinal_yol.exists():
                                 silme_izni = False
 
-                        if silme_izni:
-                            try:
-                                send2trash(dosya)
-                                self.log_yaz(f"[SİLİNDİ] {dosya.name}")
+                            # 2. Kural: Boyut şartı
+                            if silme_izni and self.boyut_sart.get():
+                                if orijinal_yol.exists():
+                                    kopya_boyut = os.path.getsize(dosya_yolu)
+                                    orijinal_boyut = os.path.getsize(orijinal_yol)
+                                    if kopya_boyut != orijinal_boyut:
+                                        silme_izni = False
+                                else:
+                                    silme_izni = False
+
+                            if silme_izni:
+                                send2trash(str(dosya_yolu))
+                                self.log_yaz(f"[SİLİNDİ] {dosya_yolu.name}")
                                 temizlenen_dosya_sayisi += 1
-                            except Exception as e:
-                                self.log_yaz(f"[HATA] {dosya.name} silinemedi: {e}")
+
+                        except PermissionError:
+                            self.log_yaz(f"[HATA - YETKİ YOK] {dosya_yolu.name} silinemedi (Erişim engellendi).")
+                        except Exception as e:
+                            self.log_yaz(f"[HATA] {dosya_yolu.name}: {e}")
 
             self.log_yaz("-" * 50)
             if self.iptal_edildi:
@@ -226,7 +245,7 @@ class KopyaTemizleyiciApp:
             else:
                 self.log_yaz(f"İşlem tamamlandı! Toplam {temizlenen_dosya_sayisi} dosya çöp kutusuna taşındı.")
                 messagebox.showinfo("Tamamlandı", f"İşlem bitti!\n{temizlenen_dosya_sayisi} adet dosya çöp kutusuna taşındı.")
-            
+
         except Exception as e:
             self.log_yaz(f"Beklenmeyen bir hata oluştu: {e}")
         finally:
@@ -234,7 +253,7 @@ class KopyaTemizleyiciApp:
             self.baslat_btn.config(state="normal", bg="#4CAF50")
             self.durdur_btn.config(state="disabled", bg="gray")
             self.onay_cb.config(state="normal")
-            
+
             if self.iptal_edildi:
                 self.durum_etiketi.config(text="İptal Edildi", fg="orange")
             else:
